@@ -67,6 +67,53 @@ npm run dev
 | 数据抽样 | `datasample` | 抽样方案 | 方案编号、数据源、抽样方式 |
 | 采集告警 | `alertpolicy` | 告警策略 | 策略编号、监控指标、触发条件 |
 
+## 数据抽样：确定性分层抽样
+
+数据抽样模块（后端 `app/services/datasample_pkg/`，前端
+`frontend/src/views/datasample/`）围绕「结果可复现、覆盖可核对、版本可追溯」实现：
+
+- **确定性**：随机种子只由稳定输入（数据指纹、方案指纹、批次范围）派生，不引用时间、
+  内存地址或全局随机状态；相同数据版本与方案版本在任何进程、任何时间重跑都得到同一样本。
+- **两套配额口径**：比例口径（Hamilton 最大余数法，候选数封顶）与最小样本调整口径
+  （先保每层最小样本再按比例补齐）。小分层候选不足且总量仍满足总比例时，两套口径给出
+  不同样本量，同一份样本数据集保留两个可追溯的结果版本。
+- **幂等与并发**：按「方案 + 批次范围」加键锁，重复执行命中既有结果，不混用新批次生成
+  第二份结果；并发触发只产生一个运行。
+- **独立版本**：方案变更（老版本保留停用）、批次新增、零候选层都产生独立版本结果；
+  零候选层不抽样，只在覆盖清单留痕。
+- **覆盖核对**：样本覆盖清单逐层给出候选数、配额、实际样本数、层随机种子与随机依据，
+  与样本数据集记录一一对应、逐层核对一致。
+- **保存侧回写**：样本数据集回写到数据保存侧清单，按「批次 + 记录编号」去重；同一份
+  样本数据集反复处理只算一次（仅累加处理次数），批次边界用覆盖清单解释。
+- **调用链审计**：批次入库、运行开始、结果生成、幂等命中、保存侧回写等阶段全部留痕，
+  优先级轨迹可回查。
+
+### 数据抽样接口
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/datasample` | 抽样方案列表（含历史版本） |
+| POST | `/api/datasample` | 登记抽样方案 |
+| POST | `/api/datasample/plans/{id}/revise` | 方案变更，生成独立新版本 |
+| POST | `/api/datasample/plans/{id}/actions` | 提交评审 / 启用 / 停用 |
+| GET/POST | `/api/datasample/batches` | 数据批次（携带数据版本）查询/入库 |
+| POST | `/api/datasample/plans/{id}/runs` | 执行分层抽样（幂等、并发安全） |
+| GET | `/api/datasample/runs` | 抽样运行列表（数据指纹、随机依据） |
+| GET | `/api/datasample/results` | 结果版本列表（比例/最小调整两口径） |
+| GET | `/api/datasample/results/{id}` | 覆盖详情：层计划、覆盖清单、优先级轨迹、样本数据集 |
+| POST | `/api/datasample/results/{id}/writeback` | 回写数据保存侧清单（批次去重） |
+| GET | `/api/datasample/ledger` | 保存侧清单与批次样本边界 |
+| GET | `/api/datasample/audit` | 调用链审计，可按运行回查 |
+
+### 验收测试
+
+```bash
+cd backend
+.venv/bin/python -I tests/test_datasample_chain.py          # 全链路（确定性/幂等/并发/去重）
+.venv/bin/uvicorn app.main:app --port 8011 &               # 起服务后
+BASE_URL=http://127.0.0.1:8011 .venv/bin/python -I tests/test_datasample_http.py
+```
+
 ## 约定
 
 - 每个模块的前端页面在 `frontend/src/views/<模块>/index.vue`，后端接口在

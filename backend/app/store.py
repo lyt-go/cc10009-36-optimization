@@ -8,6 +8,17 @@ from typing import Any
 
 from app.seed import SEED_ROWS
 
+# 数据抽样的内部过程表（批次/记录/运行/结果/保存侧清单/审计）不作为独立业务模块
+# 出现在运营概览里，它们由数据抽样模块的接口统一解释。
+INTERNAL_MODULES = {
+    "sample_batch",
+    "sample_batch_record",
+    "sample_run",
+    "sample_result",
+    "sample_ledger",
+    "sample_audit",
+}
+
 
 class Store:
     def __init__(self) -> None:
@@ -16,7 +27,7 @@ class Store:
         }
 
     def module_names(self) -> list[str]:
-        return sorted(self._tables)
+        return sorted(name for name in self._tables if name not in INTERNAL_MODULES)
 
     def rows(self, module: str) -> list[dict[str, Any]]:
         return self._tables.setdefault(module, [])
